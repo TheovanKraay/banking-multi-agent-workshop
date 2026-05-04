@@ -12,12 +12,12 @@ from typing import Literal
 from langgraph.graph import StateGraph, START, MessagesState
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command, interrupt
-from langgraph_checkpoint_cosmosdb import CosmosDBSaver
+from langchain_azure_cosmosdb import CosmosDBSaverSync
 from langgraph.checkpoint.memory import MemorySaver
 from langsmith import traceable
 from src.app.services.azure_open_ai import model
 #from src.app.services.local_model import model  # Use local model for testing
-from src.app.services.azure_cosmos_db import DATABASE_NAME, checkpoint_container, chat_container, \
+from src.app.services.azure_cosmos_db import DATABASE_NAME, chat_container, \
     update_chat_container, patch_active_agent
 
 # Uncomment these if you want to use custom OAuth configuration
@@ -471,7 +471,7 @@ builder.add_conditional_edges(
     }
 )
 
-checkpointer = CosmosDBSaver(database_name=DATABASE_NAME, container_name=checkpoint_container)
+checkpointer = CosmosDBSaverSync(database_name=DATABASE_NAME, container_name="Checkpoints")
 graph = builder.compile(checkpointer=checkpointer)
 
 

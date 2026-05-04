@@ -732,8 +732,8 @@ from langgraph.types import Command, interrupt
 from langgraph.checkpoint.memory import MemorySaver
 from src.app.services.azure_open_ai import model
 from src.app.tools.coordinator import create_agent_transfer
-from langgraph_checkpoint_cosmosdb import CosmosDBSaver
-from src.app.services.azure_cosmos_db import DATABASE_NAME, checkpoint_container, chat_container, update_chat_container, \
+from langchain_azure_cosmosdb import CosmosDBSaverSync
+from src.app.services.azure_cosmos_db import DATABASE_NAME, chat_container, update_chat_container, \
     patch_active_agent
 from src.app.tools.sales import calculate_monthly_payment, create_account, get_offer_information
 from src.app.tools.support import get_branch_location, service_request
@@ -900,7 +900,7 @@ builder.add_node("human", human_node)
 
 builder.add_edge(START, "coordinator_agent")
 
-checkpointer = CosmosDBSaver(database_name=DATABASE_NAME, container_name=checkpoint_container)
+checkpointer = CosmosDBSaverSync(database_name=DATABASE_NAME, container_name="Checkpoints")
 graph = builder.compile(checkpointer=checkpointer)
 
 
