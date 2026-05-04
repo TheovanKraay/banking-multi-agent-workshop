@@ -45,7 +45,7 @@ Let's add the Checkpointer Plugin to our application.
 1. Copy the code below to the top of the file with the other imports:
 
 ```python
-from langchain_azure_cosmosdb import CosmosDBSaverSync
+from langchain_azure_cosmosdb import CosmosDBSaver
 from src.app.services.azure_cosmos_db import DATABASE_NAME, chat_container, update_chat_container, \
     patch_active_agent
 ```
@@ -60,11 +60,11 @@ graph = builder.compile(checkpointer=checkpointer)
 1. Replace those two lines with the code below:
 
 ```python
-checkpointer = CosmosDBSaverSync(database_name=DATABASE_NAME, container_name="Checkpoints")
+checkpointer = CosmosDBSaver(database_name=DATABASE_NAME, container_name="Checkpoints")
 graph = builder.compile(checkpointer=checkpointer)
 ```
 
-From this point on, the agent will save its state to Azure Cosmos DB. The *CosmosDBSaverSync* class will save the state of the agent to the database represented by the global variable, `DATABASE_NAME` in the *Checkpoints* container.
+From this point on, the agent will save its state to Azure Cosmos DB. The *CosmosDBSaver* class will save the state of the agent to the database represented by the global variable, `DATABASE_NAME` in the *Checkpoints* container.
 
 ### Enhance the agent routing
 
@@ -226,7 +226,7 @@ from langgraph.types import Command, interrupt
 from langgraph.checkpoint.memory import MemorySaver
 from src.app.services.azure_open_ai import model
 from src.app.tools.coordinator import create_agent_transfer
-from langchain_azure_cosmosdb import CosmosDBSaverSync
+from langchain_azure_cosmosdb import CosmosDBSaver
 from src.app.services.azure_cosmos_db import DATABASE_NAME, chat_container, update_chat_container, \
     patch_active_agent
 
@@ -338,7 +338,7 @@ builder.add_node("human", human_node)
 
 builder.add_edge(START, "coordinator_agent")
 
-checkpointer = CosmosDBSaverSync(database_name=DATABASE_NAME, container_name="Checkpoints")
+checkpointer = CosmosDBSaver(database_name=DATABASE_NAME, container_name="Checkpoints")
 graph = builder.compile(checkpointer=checkpointer)
 hardcoded_thread_id = "hardcoded-thread-id-01"
 

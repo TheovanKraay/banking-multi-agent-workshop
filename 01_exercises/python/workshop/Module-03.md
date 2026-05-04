@@ -731,7 +731,7 @@ from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command, interrupt
 from src.app.services.azure_open_ai import model
 from src.app.tools.coordinator import create_agent_transfer
-from langchain_azure_cosmosdb import CosmosDBSaverSync
+from langchain_azure_cosmosdb import CosmosDBSaver
 from src.app.services.azure_cosmos_db import DATABASE_NAME, chat_container, update_chat_container, \
     patch_active_agent
 from src.app.tools.sales import calculate_monthly_payment, create_account, get_offer_information
@@ -899,7 +899,7 @@ builder.add_node("human", human_node)
 
 builder.add_edge(START, "coordinator_agent")
 
-checkpointer = CosmosDBSaverSync(database_name=DATABASE_NAME, container_name="Checkpoints")
+checkpointer = CosmosDBSaver(database_name=DATABASE_NAME, container_name="Checkpoints")
 graph = builder.compile(checkpointer=checkpointer)
 
 

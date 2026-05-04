@@ -531,7 +531,7 @@ from langgraph.types import Command, interrupt
 from langsmith import traceable
 from src.app.services.azure_open_ai import model
 from src.app.tools.coordinator import create_agent_transfer
-from langchain_azure_cosmosdb import CosmosDBSaverSync
+from langchain_azure_cosmosdb import CosmosDBSaver
 from src.app.services.azure_cosmos_db import DATABASE_NAME, chat_container, update_chat_container, \
     patch_active_agent
 from src.app.tools.sales import calculate_monthly_payment, create_account, get_offer_information
@@ -704,7 +704,7 @@ builder.add_node("human", human_node)
 
 builder.add_edge(START, "coordinator_agent")
 
-checkpointer = CosmosDBSaverSync(database_name=DATABASE_NAME, container_name="Checkpoints")
+checkpointer = CosmosDBSaver(database_name=DATABASE_NAME, container_name="Checkpoints")
 graph = builder.compile(checkpointer=checkpointer)
 
 
@@ -1226,7 +1226,7 @@ from langchain_core.messages import HumanMessage, ToolMessage
 from pydantic import BaseModel
 from typing import List, Dict
 from src.app.services.azure_open_ai import model
-from langchain_azure_cosmosdb import CosmosDBSaverSync
+from langchain_azure_cosmosdb import CosmosDBSaver
 from langgraph.graph.state import CompiledStateGraph
 from starlette.middleware.cors import CORSMiddleware
 from src.app.services.azure_cosmos_db import update_chat_container, patch_active_agent, \
@@ -1507,7 +1507,7 @@ def rename_chat_session(tenantId: str, userId: str, sessionId: str, newChatSessi
                    messages=item["messages"])
 
 
-def delete_all_thread_records(cosmos_saver: CosmosDBSaverSync, thread_id: str) -> None:
+def delete_all_thread_records(cosmos_saver: CosmosDBSaver, thread_id: str) -> None:
     """
     Deletes all records related to a given thread in CosmosDB by first identifying all partition keys
     and then deleting every record under each partition key.

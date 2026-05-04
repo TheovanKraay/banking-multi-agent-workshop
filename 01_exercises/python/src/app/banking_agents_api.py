@@ -16,7 +16,7 @@ from langchain_core.messages import HumanMessage, ToolMessage
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 from src.app.services.azure_open_ai import model
-from langchain_azure_cosmosdb import CosmosDBSaverSync
+from langchain_azure_cosmosdb import CosmosDBSaver
 from langgraph.graph.state import CompiledStateGraph
 from starlette.middleware.cors import CORSMiddleware
 from src.app.services.azure_cosmos_db import update_chat_container, patch_active_agent, \
@@ -375,7 +375,7 @@ def rename_chat_session(tenantId: str, userId: str, sessionId: str, newChatSessi
                    messages=item["messages"])
 
 
-def delete_all_thread_records(cosmos_saver: CosmosDBSaverSync, thread_id: str) -> None:
+def delete_all_thread_records(cosmos_saver: CosmosDBSaver, thread_id: str) -> None:
     """
     Deletes all records related to a given thread in CosmosDB by first identifying all partition keys
     and then deleting every record under each partition key.
