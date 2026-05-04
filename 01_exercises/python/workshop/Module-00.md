@@ -85,8 +85,8 @@ You can run this sample app and workshop virtually by using GitHub Codespaces. T
 
 #### Local Environment without VS Code Dev Containers
 
-> :warning: **NOTE**
-> For the MCP parts of the workshop in module 5 to function properly, you must be running in a Linux environment. If you are on Windows, consider installing WSL, switching to dev containers or running in Codespaces.
+> :information_source: **NOTE**
+> This workshop works on Windows, macOS, and Linux. On Linux/macOS, the application benefits from [uvloop](https://github.com/MagicStack/uvloop) — a high-performance event loop built on libuv (the same I/O library that powers Node.js) — which makes async operations 2-4x faster. On Windows, the application automatically falls back to Python's built-in `asyncio` event loop, which is fully functional but has slightly higher per-event overhead. For this workshop's workload, the difference is negligible since the bottleneck is network latency to Azure services. The `requirements.txt` uses a platform marker to conditionally skip uvloop on Windows.
 
 1. To run the workshop locally on your machine, install the following:
 
@@ -195,11 +195,18 @@ When you deploy this solution it automatically injects endpoints and configurati
 But you will still need to install dependencies to run the solution locally.
 
 1. Navigate to the python folder of the project.
-2. Create and activate a virtual environment (Linux/Mac/WSL/Codespaces):
+2. Create and activate a virtual environment:
 
+   **Linux/Mac/WSL/Codespaces:**
    ```shell
    python -m venv .venv
    source .venv/bin/activate
+   ```
+
+   **Windows (PowerShell):**
+   ```powershell
+   python -m venv .venv
+   .venv\Scripts\Activate.ps1
    ```
 
 3. Install the required dependencies for the project.

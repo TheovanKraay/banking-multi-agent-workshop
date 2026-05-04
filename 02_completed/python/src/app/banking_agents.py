@@ -4,20 +4,20 @@ import sys
 import uuid
 import asyncio
 import json
-from langchain_core.messages import ToolMessage, SystemMessage
-from langchain.schema import AIMessage
+from langchain_core.messages import ToolMessage, SystemMessage, AIMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
 from typing import Literal
 from langgraph.graph import StateGraph, START, MessagesState
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command, interrupt
-from langgraph_checkpoint_cosmosdb import CosmosDBSaver
-from langgraph.checkpoint.memory import MemorySaver
+from langchain_azure_cosmosdb import CosmosDBSaver
 from langsmith import traceable
+from azure.cosmos.aio import CosmosClient as AsyncCosmosClient
+from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
 from src.app.services.azure_open_ai import model
 #from src.app.services.local_model import model  # Use local model for testing
-from src.app.services.azure_cosmos_db import DATABASE_NAME, checkpoint_container, chat_container, \
+from src.app.services.azure_cosmos_db import DATABASE_NAME, COSMOS_DB_URL, chat_container, \
     update_chat_container, patch_active_agent
 
 # Uncomment these if you want to use custom OAuth configuration
@@ -98,7 +98,7 @@ async def setup_agents():
         print("🔐 [DEBUG] Client Authentication: Dependencies unavailable - no auth")
         logging.error(f"🔐 Authentication import error: {e}")
     
-    mcp_server_url = os.getenv("MCP_SERVER_BASE_URL", "http://localhost:8080")+"/mcp/"
+    mcp_server_url = os.getenv("MCP_SERVER_BASE_URL", "http://localhost:8080").rstrip("/") + "/mcp"
     print(f"   - [DEBUG] Transport: streamable_http")
     print(f"   - [DEBUG] Server URL: {mcp_server_url}")
     print(f"   - [DEBUG] Authentication: {auth_mode.upper()}")
@@ -213,15 +213,31 @@ async def setup_agents():
     try:
         print("[DEBUG] Creating agents...")
         logging.info("Creating agents...")
-        coordinator_agent = create_react_agent(model, coordinator_tools, state_modifier=load_prompt("coordinator_agent"))
-        customer_support_agent = create_react_agent(model, support_tools, state_modifier=load_prompt("customer_support_agent"))
-        sales_agent = create_react_agent(model, sales_tools, state_modifier=load_prompt("sales_agent"))
-        transactions_agent = create_react_agent(model, transactions_tools, state_modifier=load_prompt("transactions_agent"))
+        coordinator_agent = create_react_agent(model, coordinator_tools, prompt=load_prompt("coordinator_agent"))
+        customer_support_agent = create_react_agent(model, support_tools, prompt=load_prompt("customer_support_agent"))
+        sales_agent = create_react_agent(model, sales_tools, prompt=load_prompt("sales_agent"))
+        transactions_agent = create_react_agent(model, transactions_tools, prompt=load_prompt("transactions_agent"))
         print("✅ [DEBUG] All agents created successfully")
         logging.info("✅ All agents created successfully")
     except Exception as e:
         print(f"❌ [ERROR] Failed to create agents: {e}")
         logging.error(f"❌ Failed to create agents: {e}")
+        raise
+
+    # Initialize async Cosmos DB checkpointer and recompile graph
+    global checkpointer, graph
+    try:
+        print("[DEBUG] Initializing async Cosmos DB checkpointer...")
+        async_credential = AsyncDefaultAzureCredential()
+        async_cosmos_client = AsyncCosmosClient(COSMOS_DB_URL, credential=async_credential)
+        async_database = async_cosmos_client.get_database_client(DATABASE_NAME)
+        async_checkpoint_container = async_database.get_container_client("Checkpoints")
+        checkpointer = CosmosDBSaver(async_checkpoint_container)
+        graph = builder.compile(checkpointer=checkpointer)
+        print("✅ [DEBUG] Async checkpointer initialized and graph recompiled")
+    except Exception as e:
+        print(f"❌ [ERROR] Failed to initialize async checkpointer: {e}")
+        logging.error(f"❌ Failed to initialize async checkpointer: {e}")
         raise
 
 async def cleanup_persistent_session():
@@ -238,6 +254,8 @@ async def cleanup_persistent_session():
         finally:
             _session_context = None
             _persistent_session = None
+
+
 
 @traceable(run_type="llm")
 async def call_coordinator_agent(state: MessagesState, config) -> Command[Literal["coordinator_agent", "human"]]:
@@ -374,6 +392,7 @@ async def call_transactions_agent(state: MessagesState, config) -> Command[Liter
                 msg for msg in response["messages"]
                 if not isinstance(msg, SystemMessage)
             ]
+
         return Command(update=response, goto="human")
     except Exception as e:
         print(f"❌ [ERROR] Transactions agent failed: {e}")
@@ -411,7 +430,14 @@ def get_active_agent(state: MessagesState, config) -> str:
             try:
                 print(f"[DEBUG] Found ToolMessage, parsing content...")
                 logging.info("Found ToolMessage, parsing content...")
-                content_json = json.loads(message.content)
+                # Handle both old format (plain JSON string) and new format
+                # (list of content blocks from langchain-mcp-adapters >= 0.2.0)
+                content = message.content
+                if isinstance(content, list):
+                    # New format: [{"type": "text", "text": "..."}]
+                    text_parts = [b["text"] for b in content if b.get("type") == "text"]
+                    content = text_parts[0] if text_parts else ""
+                content_json = json.loads(content)
                 activeAgent = content_json.get("goto")
                 if activeAgent:
                     print(f"[DEBUG] Extracted activeAgent from ToolMessage: {activeAgent}")
@@ -471,8 +497,8 @@ builder.add_conditional_edges(
     }
 )
 
-checkpointer = CosmosDBSaver(database_name=DATABASE_NAME, container_name=checkpoint_container)
-graph = builder.compile(checkpointer=checkpointer)
+checkpointer = None
+graph = builder.compile(checkpointer=None)  # Recompiled with CosmosDBSaver in setup_agents()
 
 
 def interactive_chat():

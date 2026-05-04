@@ -523,17 +523,16 @@ The following sections include the completed code for this Module. Copy and past
 import logging
 import os
 import uuid
-from langchain.schema import AIMessage
+from langchain_core.messages import AIMessage
 from typing import Literal
 from langgraph.graph import StateGraph, START, MessagesState
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command, interrupt
-from langgraph.checkpoint.memory import MemorySaver
 from langsmith import traceable
 from src.app.services.azure_open_ai import model
 from src.app.tools.coordinator import create_agent_transfer
-from langgraph_checkpoint_cosmosdb import CosmosDBSaver
-from src.app.services.azure_cosmos_db import DATABASE_NAME, checkpoint_container, chat_container, update_chat_container, \
+from langchain_azure_cosmosdb import CosmosDBSaver
+from src.app.services.azure_cosmos_db import DATABASE_NAME, chat_container, update_chat_container, \
     patch_active_agent
 from src.app.tools.sales import calculate_monthly_payment, create_account, get_offer_information
 from src.app.tools.support import get_branch_location, service_request
@@ -566,39 +565,44 @@ coordinator_agent_tools = [
 coordinator_agent = create_react_agent(
     model,
     tools=coordinator_agent_tools,
-    state_modifier=load_prompt("coordinator_agent"),
+    prompt=load_prompt("coordinator_agent"),
 )
 
 customer_support_agent_tools = [
     get_branch_location,
     service_request,
+    create_agent_transfer(agent_name="sales_agent"),
+    create_agent_transfer(agent_name="transactions_agent"),
 ]
 customer_support_agent = create_react_agent(
     model,
     customer_support_agent_tools,
-    state_modifier=load_prompt("customer_support_agent"),
+    prompt=load_prompt("customer_support_agent"),
 )
 
 transactions_agent_tools = [
     bank_balance,
     bank_transfer,
     get_transaction_history,
+    create_agent_transfer(agent_name="customer_support_agent"),
 ]
 transactions_agent = create_react_agent(
     model,
     transactions_agent_tools,
-    state_modifier=load_prompt("transactions_agent"),
+    prompt=load_prompt("transactions_agent"),
 )
 
 sales_agent_tools = [
-    calculate_monthly_payment,
     get_offer_information,
+    calculate_monthly_payment,
     create_account,
+    create_agent_transfer(agent_name="customer_support_agent"),
+    create_agent_transfer(agent_name="transactions_agent"),
 ]
 sales_agent = create_react_agent(
     model,
     sales_agent_tools,
-    state_modifier=load_prompt("sales_agent"),
+    prompt=load_prompt("sales_agent"),
 )
 
 
@@ -705,7 +709,7 @@ builder.add_node("human", human_node)
 
 builder.add_edge(START, "coordinator_agent")
 
-checkpointer = CosmosDBSaver(database_name=DATABASE_NAME, container_name=checkpoint_container)
+checkpointer = CosmosDBSaver(database_name=DATABASE_NAME, container_name="Checkpoints")
 graph = builder.compile(checkpointer=checkpointer)
 
 
@@ -1227,7 +1231,7 @@ from langchain_core.messages import HumanMessage, ToolMessage
 from pydantic import BaseModel
 from typing import List, Dict
 from src.app.services.azure_open_ai import model
-from langgraph_checkpoint_cosmosdb import CosmosDBSaver
+from langchain_azure_cosmosdb import CosmosDBSaver
 from langgraph.graph.state import CompiledStateGraph
 from starlette.middleware.cors import CORSMiddleware
 from src.app.services.azure_cosmos_db import update_chat_container, patch_active_agent, \
@@ -1585,10 +1589,9 @@ def extract_relevant_messages(debug_lod_id, last_active_agent, response_data, te
     last_agent_node = None
     last_agent_name = "unknown"
     for i in range(len(response_data) - 1, -1, -1):
-        if "__interrupt__" in response_data[i]:
-            if i > 0:
-                last_agent_node = response_data[i - 1]
-                last_agent_name = list(last_agent_node.keys())[0]
+        if "__interrupt__" not in response_data[i]:
+            last_agent_node = response_data[i]
+            last_agent_name = list(last_agent_node.keys())[0]
             break
 
     # storing the last active agent in the session container so that we can retrieve it later
@@ -1663,8 +1666,6 @@ def process_messages(messages, userId, tenantId, sessionId):
     update_active_agent_in_latest_message(sessionId, last_active_agent)
 
 
-@app.post("/tenant/{tenantId}/user/{userId}/sessions/{sessionId}/completion", tags=[endpointTitle],
-          response_model=List[MessageModel])
 @app.post("/tenant/{tenantId}/user/{userId}/sessions/{sessionId}/completion", tags=[endpointTitle],
           response_model=List[MessageModel])
 async def get_chat_completion(
