@@ -571,6 +571,8 @@ coordinator_agent = create_react_agent(
 customer_support_agent_tools = [
     get_branch_location,
     service_request,
+    create_agent_transfer(agent_name="sales_agent"),
+    create_agent_transfer(agent_name="transactions_agent"),
 ]
 customer_support_agent = create_react_agent(
     model,
@@ -582,6 +584,7 @@ transactions_agent_tools = [
     bank_balance,
     bank_transfer,
     get_transaction_history,
+    create_agent_transfer(agent_name="customer_support_agent"),
 ]
 transactions_agent = create_react_agent(
     model,
@@ -590,9 +593,11 @@ transactions_agent = create_react_agent(
 )
 
 sales_agent_tools = [
-    calculate_monthly_payment,
     get_offer_information,
+    calculate_monthly_payment,
     create_account,
+    create_agent_transfer(agent_name="customer_support_agent"),
+    create_agent_transfer(agent_name="transactions_agent"),
 ]
 sales_agent = create_react_agent(
     model,
@@ -1661,8 +1666,6 @@ def process_messages(messages, userId, tenantId, sessionId):
     update_active_agent_in_latest_message(sessionId, last_active_agent)
 
 
-@app.post("/tenant/{tenantId}/user/{userId}/sessions/{sessionId}/completion", tags=[endpointTitle],
-          response_model=List[MessageModel])
 @app.post("/tenant/{tenantId}/user/{userId}/sessions/{sessionId}/completion", tags=[endpointTitle],
           response_model=List[MessageModel])
 async def get_chat_completion(

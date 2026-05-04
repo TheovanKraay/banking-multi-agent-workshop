@@ -383,6 +383,10 @@ def get_active_agent(state: MessagesState, config) -> str:
             print(f"Error retrieving active agent from DB: {e}")
             activeAgent = "unknown"
 
+    # Final validation
+    if activeAgent not in ["sales_agent", "transactions_agent", "customer_support_agent", "coordinator_agent"]:
+        activeAgent = "coordinator_agent"
+
     return activeAgent
 
 
@@ -407,7 +411,7 @@ builder.add_conditional_edges(
 )
 
 checkpointer = None
-graph = None
+graph = builder.compile(checkpointer=None)  # Recompiled with CosmosDBSaver in setup_agents()
 
 
 def interactive_chat():
