@@ -20,20 +20,21 @@ from typing import List, Dict, Optional
 from datetime import datetime
 from enum import IntEnum
 from src.app.services.azure_open_ai import model
-from langchain_azure_cosmosdb import CosmosDBSaverSync
+from langchain_azure_cosmosdb import CosmosDBSaver
 from langgraph.graph.state import CompiledStateGraph
 from starlette.middleware.cors import CORSMiddleware
-from src.app.banking_agents import graph, checkpointer
+import src.app.banking_agents as banking_agents_module
+from src.app.banking_agents import setup_agents
 from src.app.services.azure_cosmos_db import update_chat_container, patch_active_agent, \
     fetch_chat_container_by_tenant_and_user, \
     fetch_chat_container_by_session, delete_userdata_item, debug_container, update_users_container, \
     update_account_container, update_offers_container, store_chat_history, update_active_agent_in_latest_message, \
     chat_container, fetch_chat_history_by_session, delete_chat_history_by_session, \
-    fetch_accounts_by_user, fetch_transactions_by_account_id, fetch_service_requests_by_tenant
+    fetch_accounts_by_user, fetch_transactions_by_account_id, fetch_service_requests_by_tenant, \
+    checkpoint_container
 import logging
 
 import asyncio
-from src.app.banking_agents import setup_agents
 
 # Handle startup delay to allow MCP server to be ready
 startup_delay = int(os.getenv("STARTUP_DELAY_SECONDS", "0"))
@@ -63,7 +64,7 @@ agent_mapping = {
 
 
 def get_compiled_graph():
-    return graph
+    return banking_agents_module.graph
 
 
 app = fastapi.FastAPI(title="Cosmos DB Multi-Agent Banking API", openapi_url="/cosmos-multi-agent-api.json")
@@ -384,7 +385,7 @@ def get_service_status():
 # Abandoned this approach as the checkpointer store does not natively keep a record of which agent responded to the last message.
 # Also, retrieving messages from the checkpointer store is not efficient as it requires scanning more records than necessary for chat history.
 # Instead, we are now storing chat history in a separate custom cosmos db session container. Keeping this code for reference.
-def _fetch_messages_for_session(sessionId: str, tenantId: str, userId: str) -> List[MessageModel]:
+async def _fetch_messages_for_session(sessionId: str, tenantId: str, userId: str) -> List[MessageModel]:
     messages = []
     config = {
         "configurable": {
@@ -394,7 +395,7 @@ def _fetch_messages_for_session(sessionId: str, tenantId: str, userId: str) -> L
     }
 
     logging.debug(f"Fetching messages for sessionId: {sessionId} with config: {config}")
-    checkpoints = list(checkpointer.list(config))
+    checkpoints = [cp async for cp in banking_agents_module.checkpointer.alist(config)]
     logging.debug(f"Number of checkpoints retrieved: {len(checkpoints)}")
 
     if checkpoints:
@@ -516,7 +517,7 @@ def rename_chat_session(tenantId: str, userId: str, sessionId: str, newChatSessi
                    messages=item["messages"])
 
 
-def delete_all_thread_records(cosmos_saver: CosmosDBSaverSync, thread_id: str) -> None:
+def delete_all_thread_records(thread_id: str) -> None:
     """
     Deletes all records related to a given thread in CosmosDB by first identifying all partition keys
     and then deleting every record under each partition key.
@@ -526,7 +527,7 @@ def delete_all_thread_records(cosmos_saver: CosmosDBSaverSync, thread_id: str) -
     query = "SELECT DISTINCT c.partition_key FROM c WHERE CONTAINS(c.partition_key, @thread_id)"
     parameters = [{"name": "@thread_id", "value": thread_id}]
 
-    partition_keys = list(cosmos_saver.container.query_items(
+    partition_keys = list(checkpoint_container.query_items(
         query=query, parameters=parameters, enable_cross_partition_query=True
     ))
 
@@ -544,14 +545,14 @@ def delete_all_thread_records(cosmos_saver: CosmosDBSaverSync, thread_id: str) -
         record_query = "SELECT c.id FROM c WHERE c.partition_key=@partition_key"
         record_parameters = [{"name": "@partition_key", "value": partition_key}]
 
-        records = list(cosmos_saver.container.query_items(
+        records = list(checkpoint_container.query_items(
             query=record_query, parameters=record_parameters, enable_cross_partition_query=True
         ))
 
         for record in records:
             record_id = record["id"]
             try:
-                cosmos_saver.container.delete_item(record_id, partition_key=partition_key)
+                checkpoint_container.delete_item(record_id, partition_key=partition_key)
                 print(f"Deleted record: {record_id} from partition: {partition_key}")
             except CosmosHttpResponseError as e:
                 print(f"Error deleting record {record_id} (HTTP {e.status_code}): {e.message}")
@@ -574,7 +575,7 @@ def delete_chat_session(tenantId: str, userId: str, sessionId: str, background_t
     delete_chat_history_by_session(sessionId)
 
     # Schedule the delete_all_thread_records function as a background task
-    background_tasks.add_task(delete_all_thread_records, checkpointer, sessionId)
+    background_tasks.add_task(delete_all_thread_records, sessionId)
 
     return {"message": "Session deleted successfully"}
 
@@ -595,10 +596,9 @@ def extract_relevant_messages(debug_lod_id, last_active_agent, response_data, te
     last_agent_node = None
     last_agent_name = "unknown"
     for i in range(len(response_data) - 1, -1, -1):
-        if "__interrupt__" in response_data[i]:
-            if i > 0:
-                last_agent_node = response_data[i - 1]
-                last_agent_name = list(last_agent_node.keys())[0]
+        if "__interrupt__" not in response_data[i]:
+            last_agent_node = response_data[i]
+            last_agent_name = list(last_agent_node.keys())[0]
             break
 
     print(f"Last active agent: {last_agent_name}")
@@ -693,7 +693,7 @@ async def get_chat_completion(
 
     # Retrieve last checkpoint
     config = {"configurable": {"thread_id": sessionId, "checkpoint_ns": "", "userId": userId, "tenantId": tenantId}}
-    checkpoints = list(checkpointer.list(config))
+    checkpoints = [cp async for cp in banking_agents_module.checkpointer.alist(config)]
     last_active_agent = "coordinator_agent"  # Default fallback
 
     if not checkpoints:

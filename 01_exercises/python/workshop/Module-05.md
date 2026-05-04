@@ -99,19 +99,19 @@ import sys
 import uuid
 import asyncio
 import json
-from langchain_core.messages import ToolMessage, SystemMessage
-from langchain.schema import AIMessage
+from langchain_core.messages import ToolMessage, SystemMessage, AIMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
 from typing import Literal
 from langgraph.graph import StateGraph, START, MessagesState
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command, interrupt
-from langchain_azure_cosmosdb import CosmosDBSaverSync
-from langgraph.checkpoint.memory import MemorySaver
+from langchain_azure_cosmosdb import CosmosDBSaver
 from langsmith import traceable
+from azure.cosmos.aio import CosmosClient as AsyncCosmosClient
+from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
 from src.app.services.azure_open_ai import model
-from src.app.services.azure_cosmos_db import DATABASE_NAME, chat_container, \
+from src.app.services.azure_cosmos_db import DATABASE_NAME, COSMOS_DB_URL, chat_container, \
     update_chat_container, patch_active_agent
 
 # Uncomment these if you want to use custom OAuth configuration
@@ -183,7 +183,7 @@ async def setup_agents():
         print("🔐 Client Authentication: Dependencies unavailable - no auth")
     
     print("   - Transport: streamable_http")
-    print("   - Server URL: "+os.getenv("MCP_SERVER_BASE_URL", "http://localhost:8080")+"/mcp/")
+    print("   - Server URL: "+os.getenv("MCP_SERVER_BASE_URL", "http://localhost:8080")+"/mcp")
     print(f"   - Authentication: {auth_mode.upper()}")
     print("   - Status: Ready to connect\\n")
     
@@ -191,7 +191,7 @@ async def setup_agents():
     client_config = {
         "banking_tools": {
             "transport": "streamable_http",
-            "url": os.getenv("MCP_SERVER_BASE_URL", "http://localhost:8080")+"/mcp/",
+            "url": os.getenv("MCP_SERVER_BASE_URL", "http://localhost:8080")+"/mcp",
         }
     }
     
@@ -228,10 +228,19 @@ async def setup_agents():
     transactions_tools = filter_tools_by_prefix(all_tools, ["bank_transfer", "get_transaction_history", "bank_balance", "transfer_to_customer_support_agent"])
 
     # Create agents with their respective tools
-    coordinator_agent = create_react_agent(model, coordinator_tools, state_modifier=load_prompt("coordinator_agent"))
-    customer_support_agent = create_react_agent(model, support_tools, state_modifier=load_prompt("customer_support_agent"))
-    sales_agent = create_react_agent(model, sales_tools, state_modifier=load_prompt("sales_agent"))
-    transactions_agent = create_react_agent(model, transactions_tools, state_modifier=load_prompt("transactions_agent"))
+    coordinator_agent = create_react_agent(model, coordinator_tools, prompt=load_prompt("coordinator_agent"))
+    customer_support_agent = create_react_agent(model, support_tools, prompt=load_prompt("customer_support_agent"))
+    sales_agent = create_react_agent(model, sales_tools, prompt=load_prompt("sales_agent"))
+    transactions_agent = create_react_agent(model, transactions_tools, prompt=load_prompt("transactions_agent"))
+
+    # Initialize async Cosmos DB checkpointer and compile graph
+    global checkpointer, graph
+    async_credential = AsyncDefaultAzureCredential()
+    async_cosmos_client = AsyncCosmosClient(COSMOS_DB_URL, credential=async_credential)
+    async_database = async_cosmos_client.get_database_client(DATABASE_NAME)
+    async_checkpoint_container = async_database.get_container_client("Checkpoints")
+    checkpointer = CosmosDBSaver(async_checkpoint_container)
+    graph = builder.compile(checkpointer=checkpointer)
 
 async def cleanup_persistent_session():
     """Clean up the persistent MCP session when the application shuts down"""
@@ -247,6 +256,7 @@ async def cleanup_persistent_session():
         finally:
             _session_context = None
             _persistent_session = None
+
 
 @traceable(run_type="llm")
 async def call_coordinator_agent(state: MessagesState, config) -> Command[Literal["coordinator_agent", "human"]]:
@@ -319,7 +329,6 @@ async def call_transactions_agent(state: MessagesState, config) -> Command[Liter
     })
     response = await transactions_agent.ainvoke(state, config)
     # explicitly remove the system message added above from response
-    print(f"DEBUG: transactions_agent response: {response}")
     if isinstance(response, dict) and "messages" in response:
         response["messages"] = [
             msg for msg in response["messages"]
@@ -345,7 +354,14 @@ def get_active_agent(state: MessagesState, config) -> str:
     for message in reversed(state['messages']):
         if isinstance(message, ToolMessage):
             try:
-                content_json = json.loads(message.content)
+                # Handle both old format (plain JSON string) and new format
+                # (list of content blocks from langchain-mcp-adapters >= 0.2.0)
+                content = message.content
+                if isinstance(content, list):
+                    # New format: [{"type": "text", "text": "..."}]
+                    text_parts = [b["text"] for b in content if b.get("type") == "text"]
+                    content = text_parts[0] if text_parts else ""
+                content_json = json.loads(content)
                 activeAgent = content_json.get("goto")
                 if activeAgent:
                     print(f"DEBUG: Extracted activeAgent from ToolMessage: {activeAgent}")
@@ -390,8 +406,8 @@ builder.add_conditional_edges(
     }
 )
 
-checkpointer = CosmosDBSaverSync(database_name=DATABASE_NAME, container_name="Checkpoints")
-graph = builder.compile(checkpointer=checkpointer)
+checkpointer = None
+graph = None
 
 
 def interactive_chat():
@@ -439,6 +455,7 @@ In `banking_agents_api.py` add the below imports:
 from datetime import datetime
 import asyncio
 from src.app.banking_agents import setup_agents
+import src.app.banking_agents as banking_agents_module
 ```
 
 Locate the below function:
@@ -513,6 +530,18 @@ Locate the `get_chat_completion` function and add the following line at the star
 
 ```python
     await ensure_agents_initialized()
+```
+
+Next, locate the `checkpoints` line within `get_chat_completion`:
+
+```python
+    checkpoints = list(checkpointer.list(config))
+```
+
+Replace it with the async version (since `CosmosDBSaver` is now async):
+
+```python
+    checkpoints = [cp async for cp in banking_agents_module.checkpointer.alist(config)]
 ```
 
 Finally, locate this code block within `get_chat_completion`:
@@ -643,7 +672,7 @@ When the server has fully start, you should now see something like:
 ```shell
    Token: banking-...
    - Transport: streamable_http
-   - Server URL: http://localhost:8080/mcp/
+   - Server URL: http://localhost:8080/mcp
    - Authentication: SIMPLE_TOKEN
    - Status: Ready to connect\n
 🔐 Added Bearer token authentication to client
@@ -728,7 +757,7 @@ There were a lot of changes to banking_agents.py. Below is a concise diff-style 
     async def setup_agents():
         client_config = {"banking_tools": {
             "transport": "streamable_http",
-            "url": os.getenv("MCP_SERVER_BASE_URL", "http://localhost:8080") + "/mcp/",
+            "url": os.getenv("MCP_SERVER_BASE_URL", "http://localhost:8080") + "/mcp",
             # optional auth headers
             "headers": {"Authorization": f"Bearer {os.getenv('MCP_AUTH_TOKEN')}"}
         }}
@@ -759,15 +788,16 @@ There were a lot of changes to banking_agents.py. Below is a concise diff-style 
 ### 4. Agents created the same way, but with MCP tools
 
 ```python
-coordinator_agent      = create_react_agent(model, coordinator_tools,      state_modifier=load_prompt("coordinator_agent"))
-customer_support_agent = create_react_agent(model, support_tools,          state_modifier=load_prompt("customer_support_agent"))
-sales_agent            = create_react_agent(model, sales_tools,            state_modifier=load_prompt("sales_agent"))
-transactions_agent     = create_react_agent(model, transactions_tools,     state_modifier=load_prompt("transactions_agent"))
+coordinator_agent      = create_react_agent(model, coordinator_tools,      prompt=load_prompt("coordinator_agent"))
+customer_support_agent = create_react_agent(model, support_tools,          prompt=load_prompt("customer_support_agent"))
+sales_agent            = create_react_agent(model, sales_tools,            prompt=load_prompt("sales_agent"))
+transactions_agent     = create_react_agent(model, transactions_tools,     prompt=load_prompt("transactions_agent"))
 ```
 
-### 5. Async agent nodes
+### 5. Simplified async agent nodes
 
 - **Node functions are async**; agent calls use `ainvoke`.
+- **No explicit transfer detection needed**: The MCP transfer tools return a JSON payload with a `"goto"` field. The `get_active_agent` conditional edge (see below) reads this from the `ToolMessage` to route to the correct sub-agent. Each node simply returns `Command(update=response, goto="human")`.
 
     ```python
     @traceable(run_type="llm")
@@ -791,13 +821,17 @@ transactions_agent     = create_react_agent(model, transactions_tools,     state
 
 ### 7. Conditional routing via ToolMessage (`goto`)
 
-- **New `get_active_agent`** reads the last `ToolMessage` (emitted by MCP tools) for a `"goto"` hint; falls back to Cosmos DB.
+- **New `get_active_agent`** reads the last `ToolMessage` (emitted by MCP tools) for a `"goto"` hint; falls back to Cosmos DB. It handles both plain string content and the list-of-content-blocks format used by `langchain-mcp-adapters >= 0.2.0`.
 
     ```python
     def get_active_agent(state, config) -> str:
         for msg in reversed(state["messages"]):
             if isinstance(msg, ToolMessage):
-                active = json.loads(msg.content).get("goto")
+                content = msg.content
+                if isinstance(content, list):
+                    text_parts = [b["text"] for b in content if b.get("type") == "text"]
+                    content = text_parts[0] if text_parts else ""
+                active = json.loads(content).get("goto")
                 if active: return active
         # fallback to DB 'activeAgent'
         ...
@@ -816,7 +850,7 @@ transactions_agent     = create_react_agent(model, transactions_tools,     state
 
 ### 8. What stayed the same?
 
-- **LangGraph structure & CosmosDBSaverSync** usage are preserved (checkpointer + `START → coordinator_agent`).
+- **LangGraph structure & CosmosDBSaver** usage are preserved (async checkpointer + `START → coordinator_agent`).
 - **Cosmos "activeAgent" point lookup** remains for persistence and fallback routing.
 
 Tools are now discovered and invoked via MCP, agent nodes are async, routing respects MCP tool-emitted `goto`, and per-turn IDs are injected via a temporary system message to make MCP tools stateless and reliable.
@@ -853,7 +887,7 @@ You should see output like:
 2. **Add the MCP Server**:
    - Type: `MCP: Add Server`
    - Press Enter
-   - **Enter Server URL**: `http://localhost:8080/mcp/`
+   - **Enter Server URL**: `http://localhost:8080/mcp`
    - **Enter Server Name**: `banking-mcp-server` (or any name you prefer)
    - **Verify**: You should see a success message confirming the server was added
 
@@ -917,7 +951,7 @@ The configuration looks like this:
 {
   "servers": {
     "banking-mcp-server": {
-      "url": "http://localhost:8080/mcp/",
+      "url": "http://localhost:8080/mcp",
       "type": "http"
     }
   },

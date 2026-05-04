@@ -38,14 +38,14 @@ transactions_agent_tools = []
 transactions_agent = create_react_agent(
     model,
     transactions_agent_tools,
-    state_modifier=load_prompt("transactions_agent"),
+    prompt=load_prompt("transactions_agent"),
 )
 
 sales_agent_tools = []
 sales_agent = create_react_agent(
     model,
     sales_agent_tools,
-    state_modifier=load_prompt("sales_agent"),
+    prompt=load_prompt("sales_agent"),
 )
 ```
 
@@ -724,12 +724,11 @@ The following sections include the completed code for this Module. Copy and past
 import logging
 import os
 import uuid
-from langchain.schema import AIMessage
+from langchain_core.messages import AIMessage
 from typing import Literal
 from langgraph.graph import StateGraph, START, MessagesState
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command, interrupt
-from langgraph.checkpoint.memory import MemorySaver
 from src.app.services.azure_open_ai import model
 from src.app.tools.coordinator import create_agent_transfer
 from langchain_azure_cosmosdb import CosmosDBSaverSync
@@ -766,7 +765,7 @@ coordinator_agent_tools = [
 coordinator_agent = create_react_agent(
     model,
     tools=coordinator_agent_tools,
-    state_modifier=load_prompt("coordinator_agent"),
+    prompt=load_prompt("coordinator_agent"),
 )
 
 customer_support_agent_tools = [
@@ -776,7 +775,7 @@ customer_support_agent_tools = [
 customer_support_agent = create_react_agent(
     model,
     customer_support_agent_tools,
-    state_modifier=load_prompt("customer_support_agent"),
+    prompt=load_prompt("customer_support_agent"),
 )
 
 transactions_agent_tools = [
@@ -787,7 +786,7 @@ transactions_agent_tools = [
 transactions_agent = create_react_agent(
     model,
     transactions_agent_tools,
-    state_modifier=load_prompt("transactions_agent"),
+    prompt=load_prompt("transactions_agent"),
 )
 
 sales_agent_tools = [
@@ -798,7 +797,7 @@ sales_agent_tools = [
 sales_agent = create_react_agent(
     model,
     sales_agent_tools,
-    state_modifier=load_prompt("sales_agent"),
+    prompt=load_prompt("sales_agent"),
 )
 
 

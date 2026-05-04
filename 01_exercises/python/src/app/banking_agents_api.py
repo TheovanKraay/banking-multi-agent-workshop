@@ -451,10 +451,9 @@ def extract_relevant_messages(debug_lod_id, last_active_agent, response_data, te
     last_agent_node = None
     last_agent_name = "unknown"
     for i in range(len(response_data) - 1, -1, -1):
-        if "__interrupt__" in response_data[i]:
-            if i > 0:
-                last_agent_node = response_data[i - 1]
-                last_agent_name = list(last_agent_node.keys())[0]
+        if "__interrupt__" not in response_data[i]:
+            last_agent_node = response_data[i]
+            last_agent_name = list(last_agent_node.keys())[0]
             break
 
     # storing the last active agent in the session container so that we can retrieve it later
