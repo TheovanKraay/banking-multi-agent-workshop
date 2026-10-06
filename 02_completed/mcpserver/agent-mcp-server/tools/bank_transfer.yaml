@@ -1,0 +1,93 @@
+# bank_transfer: moves funds between two accounts of the same tenant.
+#
+# The accounts container is partitioned by [tenantId, accountId], so the source and
+# destination accounts live in different logical partitions and a single transactional
+# batch cannot cover both. The tool is therefore a bounded sequence:
+#   1. read source and destination (fails fast if either does not exist)
+#   2. assert ownership and sufficient funds
+#   3. debit leg  = ONE transactional batch in the source partition
+#                   (balance decrement + transaction record, atomic, ETag-pinned to step 1
+#                    so a concurrent change between the funds check and the debit is rejected)
+#   4. credit leg = ONE transactional batch in the destination partition
+# Each leg is atomic. Across legs Cosmos DB has no GA cross-partition transaction; a
+# failure between 3 and 4 is reported to the caller as an error.
+tools:
+  bank_transfer:
+    description: Transfer funds from one of the user's accounts to another account of the same bank tenant.
+    version: "1.0"
+    tags: [banking, transactions, write]
+    governance:
+      readOnly: false
+      allowedPatchPaths: [/balance]
+      timeoutMs: 15000
+    operation:
+      type: sequence
+      container: AccountsData
+      steps:
+        - id: source
+          type: point-read
+          itemId: "${fromAccount}"
+          partitionKeys: ["${tenantId}", "${fromAccount}"]
+        - id: destination
+          type: point-read
+          itemId: "${toAccount}"
+          partitionKeys: ["${tenantId}", "${toAccount}"]
+        - id: owner
+          type: assert
+          expression: "steps.source.userId == input.userId && steps.source.type == 'BankAccount' && steps.destination.type == 'BankAccount'"
+          message: The source account was not found for this user, or the destination is not a bank account.
+        - id: funds
+          type: assert
+          expression: "steps.source.balance >= input.amount"
+          message: Insufficient funds in the source account.
+        - id: debit
+          type: transactional-batch
+          partitionKeys: ["${tenantId}", "${fromAccount}"]
+          steps:
+            - id: debitBalance
+              type: patch
+              itemId: "${fromAccount}"
+              concurrency: { ifMatch: "${steps.source._etag}" }
+              operations:
+                - { op: decrement, path: /balance, value: "${amount}" }
+            - id: debitRecord
+              type: create
+              document:
+                id: "${generated.debitId}"
+                type: BankTransaction
+                tenantId: "${tenantId}"
+                accountId: "${fromAccount}"
+                debitAmount: "${amount}"
+                creditAmount: 0
+                details: "Bank Transfer to ${toAccount}"
+                transactionDateTime: "${system.utcNow}"
+        - id: credit
+          type: transactional-batch
+          partitionKeys: ["${tenantId}", "${toAccount}"]
+          steps:
+            - id: creditBalance
+              type: patch
+              itemId: "${toAccount}"
+              operations:
+                - { op: increment, path: /balance, value: "${amount}" }
+            - id: creditRecord
+              type: create
+              document:
+                id: "${generated.creditId}"
+                type: BankTransaction
+                tenantId: "${tenantId}"
+                accountId: "${toAccount}"
+                debitAmount: 0
+                creditAmount: "${amount}"
+                details: "Bank Transfer from ${fromAccount}"
+                transactionDateTime: "${system.utcNow}"
+    input:
+      type: object
+      required: [fromAccount, toAccount, amount, tenantId, userId]
+      properties:
+        fromAccount: { type: string, minLength: 1, maxLength: 64, description: "Source account number, e.g. Acc001." }
+        toAccount: { type: string, minLength: 1, maxLength: 64, description: "Destination account number." }
+        amount: { type: number, minimum: 0.01, maximum: 1000000 }
+        tenantId: { type: string, description: Tenant id supplied by the application context. }
+        userId: { type: string, description: User id supplied by the application context. }
+        thread_id: { type: string, description: "Conversation id (optional, informational)." }

@@ -1,0 +1,28 @@
+# get_offer_information: vector search over offer terms, filtered by account type.
+# The server embeds user_prompt with Azure OpenAI and binds the vector as @embedding.
+tools:
+  get_offer_information:
+    description: Find banking product offers relevant to the user's request. accountType must be 'CreditCard' or 'Savings'.
+    version: "1.0"
+    tags: [banking, offers, search]
+    operation:
+      type: vector-search
+      container: OffersData
+      searchText: "${user_prompt}"
+      vectorPath: /vector
+      partitionKeys: ["${tenantId}"]
+      where: "c.type = 'Term' AND c.accountType = @accountType"
+      parameters:
+        accountType: "${accountType}"
+      topK: 3
+      select: [offerId, name, text]
+    input:
+      type: object
+      required: [user_prompt, accountType, tenantId]
+      properties:
+        user_prompt: { type: string, minLength: 1, maxLength: 1000, description: What the user is looking for. }
+        accountType: { type: string, enum: [CreditCard, Savings] }
+        tenantId: { type: string, description: Tenant id supplied by the application context. }
+        userId: { type: string, description: User id supplied by the application context. }
+    governance:
+      maxTopK: 10

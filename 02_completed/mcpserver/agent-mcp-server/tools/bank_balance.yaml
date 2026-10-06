@@ -1,0 +1,33 @@
+# bank_balance: returns the balance of one of the caller's accounts.
+# Replaces mcp_http_server.py::bank_balance (which built SQL with f-strings).
+tools:
+  bank_balance:
+    description: Retrieve the balance and details for one of the user's bank accounts, e.g. account_number "Acc001".
+    version: "1.0"
+    tags: [banking, accounts, read]
+    operation:
+      type: sequence
+      container: AccountsData
+      steps:
+        - id: account
+          type: point-read
+          itemId: "${account_number}"
+          partitionKeys: ["${tenantId}", "${account_number}"]
+        - id: owner
+          type: assert
+          expression: "steps.account.userId == input.userId && steps.account.type == 'BankAccount'"
+          message: Account not found for this user.
+    input:
+      type: object
+      required: [account_number, tenantId, userId]
+      properties:
+        account_number: { type: string, minLength: 1, maxLength: 64, pattern: "^[A-Za-z0-9_-]+$", description: "Account number, e.g. Acc001." }
+        tenantId: { type: string, description: Tenant id supplied by the application context. }
+        userId: { type: string, description: User id supplied by the application context. }
+        thread_id: { type: string, description: "Conversation id (optional, informational)." }
+    output:
+      select:
+        accountId: accountId
+        name: name
+        accountType: accountType
+        balance: balance

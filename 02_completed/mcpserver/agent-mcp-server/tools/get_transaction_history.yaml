@@ -1,0 +1,36 @@
+# get_transaction_history: transactions for one account in a date range.
+# Partition-scoped, parameterised query (no cross-partition fan-out).
+tools:
+  get_transaction_history:
+    description: Retrieve transactions for an account between two dates (ISO-8601), newest first.
+    version: "1.0"
+    tags: [banking, transactions, read]
+    operation:
+      type: query
+      container: AccountsData
+      statement: |
+        SELECT TOP @limit c.id, c.accountId, c.debitAmount, c.creditAmount,
+               c.accountBalance, c.details, c.transactionDateTime
+        FROM c
+        WHERE c.type = 'BankTransaction'
+          AND c.transactionDateTime >= @startDate
+          AND c.transactionDateTime <= @endDate
+        ORDER BY c.transactionDateTime DESC
+      parameters:
+        startDate: "${startDate}"
+        endDate: "${endDate}"
+        limit: "${limit}"
+      partitionKeys: ["${tenantId}", "${accountId}"]
+    input:
+      type: object
+      required: [accountId, startDate, endDate, tenantId]
+      properties:
+        accountId: { type: string, minLength: 1, maxLength: 64, description: "Account number, e.g. Acc001." }
+        startDate: { type: string, description: "Start of the range, ISO-8601 (e.g. 2025-01-01T00:00:00Z)." }
+        endDate: { type: string, description: "End of the range, ISO-8601 (e.g. 2025-12-31T23:59:59Z)." }
+        limit: { type: integer, default: 50, minimum: 1, maximum: 100 }
+        tenantId: { type: string, description: Tenant id supplied by the application context. }
+        userId: { type: string, description: User id supplied by the application context. }
+        thread_id: { type: string, description: "Conversation id (optional, informational)." }
+    governance:
+      maxItems: 100

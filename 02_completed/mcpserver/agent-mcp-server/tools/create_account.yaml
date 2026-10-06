@@ -1,0 +1,36 @@
+# create_account: opens a new account (write; explicitly enabled).
+tools:
+  create_account:
+    description: Create a new bank account for the user with an initial balance. Returns the new account number.
+    version: "1.0"
+    tags: [banking, accounts, write]
+    governance:
+      readOnly: false
+    operation:
+      type: create
+      container: AccountsData
+      partitionKeys: ["${tenantId}", "A${generated.account}"]
+      document:
+        id: "A${generated.account}"
+        accountId: "A${generated.account}"
+        type: BankAccount
+        tenantId: "${tenantId}"
+        userId: "${userId}"
+        name: Account
+        accountName: "${account_holder}"
+        accountType: Savings
+        balance: "${balance}"
+        startDate: "${system.utcNow}"
+    input:
+      type: object
+      required: [account_holder, balance, tenantId, userId]
+      properties:
+        account_holder: { type: string, minLength: 1, maxLength: 200, description: Name of the account holder. }
+        balance: { type: number, minimum: 0, maximum: 1000000, description: Initial balance. }
+        tenantId: { type: string, description: Tenant id supplied by the application context. }
+        userId: { type: string, description: User id supplied by the application context. }
+    output:
+      select:
+        accountNumber: accountId
+        accountName: accountName
+        balance: balance

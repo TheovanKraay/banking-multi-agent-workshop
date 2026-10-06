@@ -1,0 +1,46 @@
+# =============================================================================
+# Banking sample: shared server configuration
+# =============================================================================
+# This directory is loaded as one configuration. Each tool lives in its own file
+# so that adding a tool (by a human or an agent) means adding one YAML file and
+# running:  agent-mcp-server validate --config samples/banking
+#
+# Data model (Banking Multi-Agent Workshop):
+#   AccountsData  partition key [/tenantId, /accountId]  (hierarchical)
+#                 docs: BankAccount, BankTransaction, ServiceRequest (field `type`)
+#   OffersData    partition key [/tenantId], vector path /vector
+# =============================================================================
+
+version: "1.0"
+
+sources:
+  banking:
+    type: cosmos
+    endpoint: "${COSMOS_ENDPOINT}"          # environment substitution (sources/embeddings only)
+    database: "${COSMOS_DATABASE}"
+    authentication:
+      type: default                         # managed/workload identity in Azure, az/azd login locally
+
+embeddings:
+  openai:
+    type: azure-openai
+    endpoint: "${OPENAI_ENDPOINT}"
+    deployment: "${OPENAI_EMBEDDING_DEPLOYMENT}"
+    authentication:
+      type: default
+
+defaults:
+  source: banking
+  embedding: openai
+  governance:
+    readOnly: true                          # every write tool must opt in with readOnly: false
+    timeoutMs: 10000
+    maxItems: 100
+  authorization:
+    # With a real identity provider, the tenant and user come from validated token
+    # claims and overwrite whatever the model sends (anti-spoofing). With
+    # DEV_BYPASS_AUTH=true and no DEV_CLAIMS these checks are skipped.
+    tenantClaim: bank_tenant
+    tenantField: tenantId
+    partitionKeyFromClaim:
+      userId: bank_user

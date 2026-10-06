@@ -1,0 +1,43 @@
+# service_request: files a customer support request (write; explicitly enabled).
+tools:
+  service_request:
+    description: Create a customer service request so that someone calls the user back. Include a summary of the user's issue.
+    version: "1.0"
+    tags: [banking, support, write]
+    governance:
+      readOnly: false
+    operation:
+      type: create
+      container: AccountsData
+      partitionKeys: ["${tenantId}", "${accountId}"]
+      document:
+        id: "${generated.requestId}"
+        type: ServiceRequest
+        tenantId: "${tenantId}"
+        userId: "${userId}"
+        accountId: "${accountId}"
+        requestedOn: "${system.utcNow}"
+        scheduledDateTime: "0001-01-01T00:00:00"
+        srType: 0
+        recipientEmail: "${recipientEmail}"
+        recipientPhone: "${recipientPhone}"
+        debitAmount: 0
+        isComplete: false
+        requestAnnotations:
+          - "${requestSummary}"
+        fulfilmentDetails: null
+    input:
+      type: object
+      required: [requestSummary, tenantId, userId]
+      properties:
+        requestSummary: { type: string, minLength: 1, maxLength: 2000, description: Summary of what the user needs. }
+        recipientPhone: { type: string, maxLength: 32, default: "" }
+        recipientEmail: { type: string, maxLength: 254, default: "" }
+        accountId: { type: string, maxLength: 64, default: "A1", description: "Related account, if known." }
+        tenantId: { type: string, description: Tenant id supplied by the application context. }
+        userId: { type: string, description: User id supplied by the application context. }
+    output:
+      select:
+        requestId: id
+        requestedOn: requestedOn
+        isComplete: isComplete
