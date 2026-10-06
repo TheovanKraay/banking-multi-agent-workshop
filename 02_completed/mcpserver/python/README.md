@@ -2,6 +2,11 @@
 
 This is a standalone HTTP-based MCP (Model Context Protocol) server for banking operations. It provides secure, OAuth2-authenticated access to banking tools via HTTP endpoints.
 
+> **Two-server mode (optional):** the Cosmos DB-backed tools can instead be declared in YAML and
+> served by the Rust Agent MCP Server, with `src/mcp_generic_server.py` keeping only the non-Cosmos
+> tools. Set `AGENT_MCP_URL` for the LangGraph app to enable it. See
+> [../agent-mcp-server/README.md](../agent-mcp-server/README.md).
+
 ## Architecture
 
 The MCP server exposes banking functionality through RESTful HTTP endpoints instead of the traditional stdio-based MCP protocol. This allows for:
