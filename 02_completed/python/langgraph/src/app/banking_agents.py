@@ -1,9 +1,11 @@
 import logging
 import os
 import sys
+import time
 import uuid
 import asyncio
 import json
+import httpx
 from langchain_core.messages import ToolMessage, SystemMessage
 from langchain.schema import AIMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -32,6 +34,64 @@ logging.basicConfig(level=logging.DEBUG)
 
 PROMPT_DIR = os.path.join(os.path.dirname(__file__), 'prompts')
 
+# Optional sibling MCP server: the Agent MCP Server (Rust) serves the Cosmos DB-backed business
+# tools declared in YAML under 02_completed/mcpserver/agent-mcp-server/tools. When AGENT_MCP_URL is
+# not set the app behaves exactly as before (single banking MCP server).
+AGENT_MCP_URL = os.getenv("AGENT_MCP_URL")
+# Optional Entra ID scope for the Agent MCP Server (e.g. api://<app-id>/.default). When set, every
+# request carries a fresh token from DefaultAzureCredential (managed identity in Azure, az login
+# locally). AGENT_MCP_TOKEN can be used instead for a static bearer token in development.
+AGENT_MCP_SCOPE = os.getenv("AGENT_MCP_SCOPE")
+AGENT_MCP_TOKEN = os.getenv("AGENT_MCP_TOKEN")
+
+
+class _EntraBearerAuth(httpx.Auth):
+    """Adds an Entra ID access token for the Agent MCP Server to every request."""
+
+    def __init__(self, scope: str):
+        from azure.identity.aio import DefaultAzureCredential
+        self._credential = DefaultAzureCredential()
+        self._scope = scope
+        self._token = None
+
+    async def async_auth_flow(self, request):
+        if self._token is None or self._token.expires_on - 300 < time.time():
+            self._token = await self._credential.get_token(self._scope)
+        request.headers["Authorization"] = f"Bearer {self._token.token}"
+        yield request
+
+
+def _agent_mcp_connection():
+    connection = {"transport": "streamable_http", "url": AGENT_MCP_URL}
+    if AGENT_MCP_SCOPE:
+        entra_auth = _EntraBearerAuth(AGENT_MCP_SCOPE)
+
+        def client_factory(headers=None, timeout=None, auth=None):
+            return httpx.AsyncClient(headers=headers, timeout=timeout, auth=entra_auth, follow_redirects=True)
+
+        connection["httpx_client_factory"] = client_factory
+    elif AGENT_MCP_TOKEN:
+        connection["headers"] = {"Authorization": f"Bearer {AGENT_MCP_TOKEN}"}
+    return connection
+
+
+def _tool_context_message(config):
+    """System message giving the agent the tenant/user context that business tools require."""
+    configurable = config["configurable"]
+    return {
+        "role": "system",
+        "content": f"If tool to be called requires tenantId='{configurable.get('tenantId', 'UNKNOWN_TENANT_ID')}', "
+                   f"userId='{configurable.get('userId', 'UNKNOWN_USER_ID')}', "
+                   f"thread_id='{configurable.get('thread_id', 'UNKNOWN_THREAD_ID')}', include these in the JSON "
+                   "parameters when invoking the tool. Do not ask the user for them, there are included here for your reference."
+    }
+
+
+def _without_system_messages(response):
+    if isinstance(response, dict) and "messages" in response:
+        response["messages"] = [msg for msg in response["messages"] if not isinstance(msg, SystemMessage)]
+    return response
+
 
 def load_prompt(agent_name):
     file_path = os.path.join(PROMPT_DIR, f"{agent_name}.prompty")
@@ -52,10 +112,13 @@ def filter_tools_by_prefix(tools, prefixes):
 _mcp_client = None
 _session_context = None
 _persistent_session = None
+_agent_session_context = None
+_agent_persistent_session = None
 
 async def setup_agents():
     global coordinator_agent, customer_support_agent, transactions_agent, sales_agent
     global _mcp_client, _session_context, _persistent_session
+    global _agent_session_context, _agent_persistent_session
 
     print("🚀 [DEBUG] Starting unified Banking Tools MCP client...")
     logging.info("🚀 Starting unified Banking Tools MCP client setup")
@@ -130,6 +193,11 @@ async def setup_agents():
         client_config["banking_tools"]["auth"] = "oauth"
         print("🔐 [DEBUG] Enabled OAuth authentication for client")
         logging.info("🔐 Enabled OAuth authentication for client")
+
+    if AGENT_MCP_URL:
+        client_config["agent_tools"] = _agent_mcp_connection()
+        print(f"🔗 [DEBUG] Agent MCP Server (Cosmos DB business tools) enabled at {AGENT_MCP_URL}")
+        logging.info(f"Agent MCP Server enabled at {AGENT_MCP_URL}")
     
     # Retry logic for MCP client initialization
     for attempt in range(1, max_retries + 1):
@@ -176,6 +244,17 @@ async def setup_agents():
         all_tools = await load_mcp_tools(_persistent_session)
         print(f"✅ [DEBUG] Successfully loaded {len(all_tools)} MCP tools")
         logging.info(f"✅ Successfully loaded {len(all_tools)} MCP tools")
+
+        # Two-server mode: open a persistent session to the Agent MCP Server and merge its tools.
+        # Its tools take precedence over same-named tools from the banking server.
+        if AGENT_MCP_URL:
+            _agent_session_context = _mcp_client.session("agent_tools")
+            _agent_persistent_session = await _agent_session_context.__aenter__()
+            agent_tools = await load_mcp_tools(_agent_persistent_session)
+            agent_tool_names = {tool.name for tool in agent_tools}
+            all_tools = [tool for tool in all_tools if tool.name not in agent_tool_names] + agent_tools
+            print(f"✅ [DEBUG] Loaded {len(agent_tools)} tools from the Agent MCP Server: {sorted(agent_tool_names)}")
+            logging.info(f"✅ Loaded {len(agent_tools)} tools from the Agent MCP Server")
     except Exception as e:
         print(f"❌ [ERROR] Failed to load MCP tools: {e}")
         logging.error(f"❌ Failed to load MCP tools: {e}")
@@ -227,6 +306,17 @@ async def setup_agents():
 async def cleanup_persistent_session():
     """Clean up the persistent MCP session when the application shuts down"""
     global _session_context, _persistent_session
+    global _agent_session_context, _agent_persistent_session
+
+    if _agent_session_context is not None and _agent_persistent_session is not None:
+        try:
+            await _agent_session_context.__aexit__(None, None, None)
+            print("Agent MCP Server session cleaned up successfully")
+        except Exception as e:
+            print(f"Error cleaning up Agent MCP Server session: {e}")
+        finally:
+            _agent_session_context = None
+            _agent_persistent_session = None
     
     if _session_context is not None and _persistent_session is not None:
         try:
@@ -306,6 +396,10 @@ async def call_customer_support_agent(state: MessagesState, config) -> Command[L
     
     if local_interactive_mode:
         patch_active_agent("cli-test", "cli-test", thread_id, "customer_support_agent")
+
+    # Business tools served by the Agent MCP Server need the tenant/user context.
+    if AGENT_MCP_URL:
+        state["messages"].append(_tool_context_message(config))
     
     try:
         print(f"[DEBUG] Invoking customer support agent with {len(state.get('messages', []))} messages")
@@ -313,6 +407,8 @@ async def call_customer_support_agent(state: MessagesState, config) -> Command[L
         response = await customer_support_agent.ainvoke(state)
         print(f"[DEBUG] Customer support agent response received: {type(response)}")
         logging.info(f"Customer support agent response received: {type(response)}")
+        if AGENT_MCP_URL:
+            response = _without_system_messages(response)
         return Command(update=response, goto="human")
     except Exception as e:
         print(f"❌ [ERROR] Customer support agent failed: {e}")
@@ -328,6 +424,10 @@ async def call_sales_agent(state: MessagesState, config) -> Command[Literal["sal
     
     if local_interactive_mode:
         patch_active_agent("cli-test", "cli-test", thread_id, "sales_agent")
+
+    # Business tools served by the Agent MCP Server need the tenant/user context.
+    if AGENT_MCP_URL:
+        state["messages"].append(_tool_context_message(config))
     
     try:
         print(f"[DEBUG] Invoking sales agent with {len(state.get('messages', []))} messages")
@@ -335,6 +435,8 @@ async def call_sales_agent(state: MessagesState, config) -> Command[Literal["sal
         response = await sales_agent.ainvoke(state, config)
         print(f"[DEBUG] Sales agent response received: {type(response)}")
         logging.info(f"Sales agent response received: {type(response)}")
+        if AGENT_MCP_URL:
+            response = _without_system_messages(response)
         return Command(update=response, goto="human")
     except Exception as e:
         print(f"❌ [ERROR] Sales agent failed: {e}")
