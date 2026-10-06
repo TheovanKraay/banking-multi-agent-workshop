@@ -7,6 +7,8 @@ Talks directly to both MCP servers (no LLM involved):
 Usage:
     python smoke_test.py            # read-only checks
     python smoke_test.py --write    # also create an account, a service request and a transfer
+    python smoke_test.py --no-search  # skip vector search (e.g. against the vNext emulator)
+    python smoke_test.py --agent-only # skip the generic banking server
 
 Environment:
     AGENT_MCP_URL    default http://localhost:8080/mcp
@@ -67,10 +69,11 @@ async def agent_server(write: bool):
             await call(session, "get_transaction_history", {
                 "accountId": "Acc001", "startDate": "2020-01-01T00:00:00Z",
                 "endDate": "2030-01-01T00:00:00Z", "limit": 3, **ctx})
-            offers = await call(session, "get_offer_information", {
-                "user_prompt": "high interest savings with no fees", "accountType": "Savings", **ctx})
-            if not offers:
-                raise SystemExit("get_offer_information returned no offers")
+            if "--no-search" not in sys.argv:
+                offers = await call(session, "get_offer_information", {
+                    "user_prompt": "high interest savings with no fees", "accountType": "Savings", **ctx})
+                if not offers:
+                    raise SystemExit("get_offer_information returned no offers")
             await call(session, "bank_balance", {"account_number": "Acc001' OR '1'='1", **ctx}, expect_error=True)
 
             if write:
@@ -99,7 +102,8 @@ async def banking_server():
 
 async def main():
     await agent_server(write="--write" in sys.argv)
-    await banking_server()
+    if "--agent-only" not in sys.argv:
+        await banking_server()
     print("\nSmoke test passed.")
 
 

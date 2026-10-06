@@ -24,7 +24,7 @@ This mode is **opt-in**. Without `AGENT_MCP_URL` the app uses the original singl
 | `get_offer_information` | `vector-search` with `where` filter | Server embeds the prompt with Azure OpenAI; `type = 'Term'` and `accountType` filters as before |
 | `create_account` | `create` | Account numbers are `A<uuid>` instead of a sequential number from a cross-partition scan |
 | `service_request` | `create` | Same document shape |
-| `bank_transfer` | `sequence`: two reads, two asserts, two transactional batches | Each leg (balance change + transaction record) is atomic; the debit is ETag-pinned to the funds check; destination is verified before any write. Records do not carry `accountBalance`. |
+| `bank_transfer` | `sequence`: two reads, two asserts, two transactional batches | Each leg (balance change + transaction record) is atomic; the debit is ETag-pinned to the funds check (a concurrent change makes the server re-read and re-check); destination is verified before any write. Records do not carry `accountBalance`. |
 
 All caller values are bound as Cosmos DB parameters (the original server built SQL with f-strings).
 Writes are explicitly enabled per tool, and inputs are validated against closed schemas.
@@ -87,7 +87,8 @@ http://localhost:4200 and ask *"What is the balance of my account Acc001?"* (ten
 ### Verify without the UI
 
 ```powershell
-# Both MCP servers directly, no LLM (add --write to also create, file a request and transfer $1)
+# Both MCP servers directly, no LLM. Flags: --write (create, file a request, transfer $1),
+# --no-search (skip vector search, e.g. on the emulator), --agent-only (skip the generic server)
 cd <repo>\02_completed\mcpserver\agent-mcp-server
 & $env:USERPROFILE\.venvs\banking-smoke\Scripts\python.exe smoke_test.py
 

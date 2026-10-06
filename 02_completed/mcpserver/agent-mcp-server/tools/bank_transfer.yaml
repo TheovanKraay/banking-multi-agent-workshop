@@ -7,7 +7,8 @@
 #   2. assert ownership and sufficient funds
 #   3. debit leg  = ONE transactional batch in the source partition
 #                   (balance decrement + transaction record, atomic, ETag-pinned to step 1
-#                    so a concurrent change between the funds check and the debit is rejected)
+#                    so a concurrent change between the funds check and the debit is detected;
+#                    the server then re-runs the reads and checks before retrying)
 #   4. credit leg = ONE transactional batch in the destination partition
 # Each leg is atomic. Across legs Cosmos DB has no GA cross-partition transaction; a
 # failure between 3 and 4 is reported to the caller as an error.
