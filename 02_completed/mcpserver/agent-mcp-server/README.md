@@ -15,6 +15,41 @@ LangGraph app (python/langgraph)
 
 This mode is **opt-in**. Without `AGENT_MCP_URL` the app uses the original single banking MCP server.
 
+## How the YAML in this folder becomes MCP tools
+
+This folder contains **configuration only**. There is no server code here. The Agent MCP Server is a
+separate, generic binary (or container image) built from its own repository. When it starts, it is
+pointed at this folder:
+
+```
+agent-mcp-server serve --config 02_completed/mcpserver/agent-mcp-server/tools
+```
+
+```
+tools/                          Agent MCP Server at startup
+  _server.yaml                  1. reads every *.yaml in tools/ and merges them
+  bank_balance.yaml             2. fills ${COSMOS_ENDPOINT} etc. from environment variables
+  bank_transfer.yaml    ──────► 3. validates everything; any error = the server does not start
+  create_account.yaml           4. turns each tool into an MCP tool (name, description, input schema)
+  ...                           5. connects to Cosmos DB and opens AccountsData / OffersData
+                                6. serves http://localhost:8080/mcp
+                                              │
+LangGraph app  ◄───── tools/list, tools/call ─┘   (the app never reads these files)
+```
+
+* **`_server.yaml`** holds what every tool shares: the Cosmos DB account and database, the Azure
+  OpenAI embedding deployment, and defaults (read-only unless a tool opts in to writes, timeouts,
+  and the token claims used for tenant and user).
+* **Each other file is one tool**: description, the Cosmos DB operation, the inputs the agent may
+  pass, and the fields to return. The server interprets these at runtime; no code is generated.
+* **Changes need a restart.** Tools are loaded once at startup, so after editing a file, stop and
+  start the server (about a second).
+* **The app only sees MCP.** `banking_agents.py` discovers the tools over MCP and gives them to
+  agents by name, so tool names must match the lists in `setup_agents()`.
+
+Full details: the server's [How it works](https://github.com/TheovanKraay/agent-mcp-server#how-it-works)
+and [YAML reference](https://github.com/TheovanKraay/agent-mcp-server/blob/main/docs/yaml-reference.md).
+
 ## What changed compared with `mcp_http_server.py`
 
 | Tool | YAML operation | Notes |
